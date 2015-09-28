@@ -26,6 +26,15 @@ void binarize(char* input_filename, char* output_filename)
       the new image's pixel)
       */
 
+      if(image[4*width*i + 4*j] > THRESHOLD)
+      {
+          value = 255;
+      }
+      else
+      {
+          value = 0;
+      }
+
       new_image[4*width*i + 4*j] = value;
       new_image[4*width*i + 4*j + 1] = value;
       new_image[4*width*i + 4*j + 2] = value;
