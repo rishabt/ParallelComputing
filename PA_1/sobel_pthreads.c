@@ -8,15 +8,57 @@
 /* TODO: it may help to put some global variables here 
 for your threads to use */
 
+unsigned part;
+unsigned char *image, *new_image;
+
+int partitions;
+unsigned total_width;
+unsigned total_height;
+
 void *worker_thread(void *arg) {
-  /* TODO: put image processing code here */ 
+  /* TODO: put image processing code here */
+
+  int thread_id = (int) arg;
+
+  int start = thread_id * partitions;
+  int end = (thread_id + 1) * partitions;
+
+  if(start == 0){
+    start += 1;
+  }
+
+  if(start >= total_width){
+    start -= 1;
+  }
+
+  if(end == total_width){
+    end -= 1;
+  }
+
+  unsigned char value;
+  for (int j = 1; j < total_height - 1; j++) {
+    for (int i = start; i < end; i++) {
+
+      value = abs((image[4*total_width*(i-1) + 4*(j-1)] + 2 * image[4*total_width*(i-1) + 4*j] +
+                image[4*total_width*(i-1) + 4*(j+1)]) - (image[4*total_width*(i+1) + 4*(j-1)] +
+                2 * image[4*total_width*(i+1) + 4*j] + image[4*total_width*(i+1) + 4*(j+1)])) +
+              abs((image[4*total_width*(i-1) + 4*(j+1)] + 2 * image[4*total_width*i + 4*(j+1)] +
+                image[4*total_width*(i+1) + 4*(j+1)]) - (image[4*total_width*(i-1) + 4*(j-1)] +
+                2 * image[4*total_width*i + 4*(j-1)] + image[4*total_width*(i+1) + 4*(j-1)]));
+
+      new_image[4*total_width*i + 4*j] = value;
+      new_image[4*total_width*i + 4*j + 1] = value;
+      new_image[4*total_width*i + 4*j + 2] = value;
+      new_image[4*total_width*i + 4*j + 3] = 255;
+    }
+  }
+
   pthread_exit(NULL);
 }
 
 void sobelize(char* input_filename, char* output_filename, int thread_count)
 {
   unsigned error;
-  unsigned char *image, *new_image;
   unsigned width, height;
 
   // load image from PNG into C array
@@ -32,6 +74,27 @@ void sobelize(char* input_filename, char* output_filename, int thread_count)
 
   remember to join all threads!
   */
+  total_width = width;
+  total_height = height;
+
+  partitions = width/thread_count;
+
+  part = (width * height)/thread_count;
+
+  int threads[thread_count];
+
+  int i;
+  for (i = 0; i < thread_count; i++) {
+    pthread_t t;
+
+    threads[i] = pthread_create(&t, NULL, worker_thread, (void*) i);
+  }
+
+  int j;
+  for (j = 0; j < thread_count; j++){
+    pthread_join(threads[i], NULL);
+  }
+
 
   gettimeofday(&end, NULL);
   printf("\n\nAlgorithm's computational part duration : %ld\n", \

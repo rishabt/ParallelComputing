@@ -46,7 +46,6 @@ void *worker_thread(void *arg) {
 void binarize(char* input_filename, char* output_filename, int thread_count)
 {
   unsigned error;
-  //unsigned char *image, *new_image;
   unsigned width, height;
 
   // load image from PNG into C array
