@@ -25,22 +25,19 @@ void sobelize(char* input_filename, char* output_filename, int thread_count)
   omp_set_num_threads(thread_count);
 
   int size = 4*width*height;
-  int i, j;
+  int i;
   #pragma omp parallel for schedule(static)
-  for(j = 1; j < height-1; j++){
-    for(i = 1; i < width-1; i++){
-       unsigned char value = abs((image[4*width*(i-1) + 4*(j-1)] + 2 * image[4*width*(i-1) + 4*j] +
-                               image[4*width*(i-1) + 4*(j+1)]) - (image[4*width*(i+1) + 4*(j-1)] +
-   	                       2 * image[4*width*(i+1) + 4*j] + image[4*width*(i+1) + 4*(j+1)])) +
-	                     abs((image[4*width*(i-1) + 4*(j+1)] + 2 * image[4*width*i + 4*(j+1)] +
-	                       image[4*width*(i+1) + 4*(j+1)]) - (image[4*width*(i-1) + 4*(j-1)] +
-	                       2 * image[4*width*i + 4*(j-1)] + image[4*width*(i+1) + 4*(j-1)]));
+  for(i = 4*(width+1); i < size - 4*(width+1); i+=4){
+    unsigned char value;
+    value = abs((image[i - 4*(width-1)] + 2*image[i - 4*width] + image[i - 4*(width - 1)]) -
+	      (image[i + 4*(width - 1)] + 2*image[i + 4*width] + image[i + 4*(width+1)])) +
+	    abs((image[i - 4*(width-1)] + 2*image[i + 4] + image[i + 4*(width + 1)]) -
+	      (image[i - 4*(width - 1)] + 2*image[i - 4] + image[i + 4*(width-1)]));
 
-       new_image[4*width*i + 4*j] = value;
-       new_image[4*width*i + 4*j + 1] = value;
-       new_image[4*width*i + 4*j + 2] = value;
-       new_image[4*width*i + 4*j + 3] = 255;
-    }
+    new_image[i] = value;
+    new_image[i+1] = value;
+    new_image[i+2] = value;
+    new_image[i+3] = 255;
   }
 
   gettimeofday(&end, NULL);
