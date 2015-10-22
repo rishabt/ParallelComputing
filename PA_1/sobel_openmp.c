@@ -21,6 +21,25 @@ void sobelize(char* input_filename, char* output_filename, int thread_count)
 
   /* TODO: put your OpenMP parallel block here */
 
+  omp_set_dynamic(0);
+  omp_set_num_threads(thread_count);
+
+  int size = 4*width*height;
+  int i;
+  #pragma omp parallel for schedule(static)
+  for(i = 4*(width+1); i < size - 4*(width+1); i+=4){
+    unsigned char value;
+    value = abs((image[i - 4*(width-1)] + 2*image[i - 4*width] + image[i - 4*(width - 1)]) -
+	      (image[i + 4*(width - 1)] + 2*image[i + 4*width] + image[i + 4*(width+1)])) +
+	    abs((image[i - 4*(width-1)] + 2*image[i + 4] + image[i + 4*(width + 1)]) -
+	      (image[i - 4*(width - 1)] + 2*image[i - 4] + image[i + 4*(width-1)]));
+
+    new_image[i] = value;
+    new_image[i+1] = value;
+    new_image[i+2] = value;
+    new_image[i+3] = 255;
+  }
+
   gettimeofday(&end, NULL);
   printf("\n\nAlgorithm's computational part duration : %ld\n", \
                ((end.tv_sec * 1000000 + end.tv_usec) - (start.tv_sec * 1000000 + start.tv_usec)));

@@ -20,6 +20,28 @@ void binarize(char* input_filename, char* output_filename, int thread_count)
 
   /* TODO: put your OpenMP parallel block here */
 
+  int i,j;
+  omp_set_dynamic(0);
+  omp_set_num_threads(thread_count);
+
+  int size = 4*width*height;
+  int curr;
+  #pragma omp parallel for schedule(static)
+  for (curr = 0; curr < size; curr=curr+4) {
+     unsigned char value = image[curr];
+     if (value > THRESHOLD) {
+       value = 255;
+     } else {
+       value = 0;
+     }
+    
+     new_image[curr] = value;
+     new_image[curr + 1] = value;
+     new_image[curr + 2] = value;
+     new_image[curr + 3] = 255;
+  }
+
+
   gettimeofday(&end, NULL);
   printf("\n\nAlgorithm's computational part duration : %ld\n", \
                ((end.tv_sec * 1000000 + end.tv_usec) - (start.tv_sec * 1000000 + start.tv_usec)));
