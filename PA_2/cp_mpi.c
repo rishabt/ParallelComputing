@@ -1,461 +1,584 @@
 #include "cp_mpi.h"
 
-int rank, np;
-int rows, columns;
+int rank;
+int np;
+int number_rows;
+int number_columns;
 
-int buffer_size, lines, lines_per_buffer, overflow, size_of_line;
-double *cp, *m;
+int buffer_size;
+int lines;
+int lines_per_buffer; 
+int overflow;
+int size_of_line;
+double* cp;
+double* o;
 
 MPI_Status status;
 
-int main(int argc, char *argv[]){
-	char *fileName;
+int main(int argc, char *argv[])
+{
+	char *file_name;
 	int charsPerLine;
 	
-	struct timeval start, end; //struct used to compute execution time
+	// Check time
+	struct timeval start, end;
 
-	//check user input
-	if(argc != 2){
-		printf("usage: mpirun -np # ./cp_mpi matrix.txt.\n");
+	// Verify user input
+	if(argc != 2)
+	{
+		printf("usage: mpirun -np # ./cp_mpi user_matrix.txt\n");
 		return -1;
 	}
 
-	//initialize MPI
-	if(MPI_SUCCESS != MPI_Init(&argc, &argv)){
-		printf("error initializing MPI.\n");
+	// MPI initialization
+	if(MPI_Init(&argc, &argv) != MPI_SUCCESS)
+	{
+		printf("MPI initialization error\n");
 		exit(-1);	
 	}
+
+    // Rank of the calling MPI process within the specified communicator
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+	// Number of MPI processes
 	MPI_Comm_size(MPI_COMM_WORLD, &np);
 
-	fileName = argv[1];
-/*	int z;
-	for(z=0;z<100;z++){
-	if(rank == 0){
-		gettimeofday(&start, NULL);
-	}*/
+	file_name = argv[1];
 
-	//get size of matrix
-	get_matrix_size(fileName);
-	//get size of each line (in bytes)
+	// Get matrix size
+	get_matrix_size(file_name);
+
+	// Get line size (in bytes)
 	get_size_of_line(&size_of_line);
-	//read user matrix
-		/*
-			note, to ensure that the matrix will always be located in a contiguous
-			portion of memory, only a single dimensional array will be used to hold the 
-			matrix. 
-		*/
-	double *matrix = user_matrix_read(fileName, size_of_line);
-//	print_matrix(matrix, lines, columns);
-	//create clicking probabilities vector
 
-	if((m = malloc((rows * columns) * sizeof(double))) == NULL || (cp = malloc(lines * sizeof(double))) == NULL){
-			printf("error allocating matrix.\n");
+	// Read the user matrix
+	double *user_matrix = user_matrix_read(file_name, size_of_line);
+
+	// Clicking probabilities vector creation
+	if((o = malloc((number_rows * number_columns) * sizeof(double))) == NULL || 
+			(cp = malloc(lines * sizeof(double))) == NULL)
+	{
+			printf("Matrix memory allocation error\n");
 			exit(-1);
-	}	
-	//computation//
-	calculate_REF(matrix, lines, columns);	
-	calculate_RREF_p(matrix, lines);
+	}
+
+	// Calculate REF and RREF_p
+	calculate_REF(user_matrix, lines, number_columns);	
+	calculate_RREF_p(user_matrix, lines);
 	
-//	print_matrix(matrix, lines, columns);
-	divide_by_max(matrix, lines, find_global_max(find_local_max(matrix, lines)));
+	divide_by_max(user_matrix, lines, get_global_maximum(get_local_maximum(user_matrix, lines)));
 
-	MPI_Gather(matrix,columns*lines,MPI_DOUBLE,m,columns*lines,MPI_DOUBLE,0,MPI_COMM_WORLD);
+	MPI_Gather(user_matrix, (number_columns * lines), MPI_DOUBLE, o, 
+					number_columns * lines, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
-	write_clicking_probabilities(m, rows);
+	write_file(o, number_rows);
+	
 	print_best_acceptance_threshold(cp, lines);
-//	if(rank == 0){
-//		gettimeofday(&end, NULL);
-//		printf(/*"\n\nAlgorithm's computational part duration :*/"%ld\n", \
-					((end.tv_sec * 1000000 + end.tv_usec) - (start.tv_sec * 1000000 + start.tv_usec)));
-//	}	
 
-//	}
-	//terminate MPI
-	if(MPI_SUCCESS != MPI_Finalize()){
-		printf("error terminating MPI.\n");
+	((end.tv_sec * 1000000 + end.tv_usec) - (start.tv_sec * 1000000 + start.tv_usec));	
+
+	// MPI termination
+	if(MPI_SUCCESS != MPI_Finalize())
+	{
+		printf("Error terminating MPI.\n");
 		exit(-1);
 	}
 	return 0; 
 }
 
 
-int get_proc_with_row(int row){
-	int i, acc=0;
-	for(i=0;i<np;i++){
-		acc += get_limit_of_row(i);
-		if(row < acc){
+int get_row_proc(int row)
+{
+	int i;
+	int a = 0;
+
+	for(i = 0; i < np; i++)
+	{
+		a += get_limit_of_row(i);
+
+		if(row < a)
+		{
 			return i;
 		}
 	}
+
 	return -1;
 }
 
-void calculate_REF(double *matrix, int row_limit, int columns){
+void calculate_REF(double* mat, int lines, int number_columns){
 	
-	int row, j, i;
-	double *tmp;
-	if((tmp = malloc(columns*row_limit*sizeof(double))) == NULL){
-		printf("error mallocing.\n");
+	int r, b, a;
+
+	double* temp = malloc(number_columns * lines * sizeof(double));
+
+	if(temp == NULL)
+	{
+		printf("Malloc error\n");
 		exit(-1);
 	}	
 
-	for(i=0;i<rank*row_limit;i++){
-		MPI_Bcast(tmp, columns, MPI_DOUBLE, i/row_limit, MPI_COMM_WORLD);
-		//adjust rows based on tmp
-		for(row=0;row<row_limit;row++){
-			for(j=i+1;j<columns;j++){
-				matrix[row*columns + j] = matrix[row*columns + j] - matrix[row*columns + i] * tmp[j];
+	for(a = 0; a < rank * lines; a++)
+	{
+		MPI_Bcast(temp, number_columns, MPI_DOUBLE, (a/lines), MPI_COMM_WORLD);
+
+		for(r = 0; r < lines; r++)
+		{
+			for(b = a + 1; b < number_columns; b++)
+			{
+				mat[r * number_columns + b] = mat[r * number_columns + b] - mat[r * number_columns + a] * temp[b];
 			}	
-			matrix[row*columns + i] = 0;
+			mat[r * number_columns + a] = 0;
 		}
 	}
 
-	for(row=0;row<row_limit;row++){
-		for(j=rank*row_limit+row+1;j<columns;j++){
-			matrix[row*columns+j] = matrix[row*columns+j] / matrix[row*columns+rank*row_limit+row];
+	for(r = 0; r < lines; r++)
+	{
+		for(b = rank * lines + r + 1; b < number_columns; b++)
+		{
+			mat[r * number_columns + b] = mat[r * number_columns + b]/mat[r * number_columns + rank * lines + r];
 		}
-		matrix[row*columns+rank*row_limit+row] = 1;
+		mat[r * number_columns + rank * lines + r] = 1;
 
-		for(i=0;i<columns;i++){
-			tmp[i] = matrix[row*columns+i];
+		for(a = 0; a < number_columns; a++)
+		{
+			temp[a] = mat[r*number_columns+a];
 		}
-		MPI_Bcast(tmp, columns, MPI_DOUBLE, rank, MPI_COMM_WORLD);
 
-		for(i=row+1;i<row_limit;i++){
-			for(j=rank*row_limit+row+1;j<columns;j++){
-				matrix[i*columns+j] = matrix[i*columns+j] - matrix[i*columns+row+rank*row_limit]*tmp[j];
+		MPI_Bcast(temp, number_columns, MPI_DOUBLE, rank, MPI_COMM_WORLD);
+
+		for(a = r + 1; a < lines; a++)
+		{
+			for(b = rank * lines + r + 1; b < number_columns; b++)
+			{
+				mat[a * number_columns + b] = mat[a * number_columns + b] - 
+										mat[a * number_columns + r + rank * lines] * temp[b];
 			}
-			matrix[i*columns+row+rank*row_limit] = 0;
+			mat[a * number_columns + r + rank * lines] = 0;
 		}
 	}
-	//TODO: fix
-	for(i=(rank+1)*get_limit_of_row(rank+1);i<columns-1;i++){
-		MPI_Bcast(tmp, columns, MPI_DOUBLE, i/get_limit_of_row(rank+1), MPI_COMM_WORLD);
+
+	for(a = ((rank + 1) * get_limit_of_row(rank + 1)); a < number_columns - 1; a++)
+	{
+		MPI_Bcast(temp, number_columns, MPI_DOUBLE, (a/get_limit_of_row(rank + 1)), MPI_COMM_WORLD);
 	}
-/*	for(i=(rank+1)*row_limit;i<columns-1;i++){
-		printf("%d\n", i/row_limit);
-		MPI_Bcast(tmp, columns, MPI_DOUBLE, i/row_limit, MPI_COMM_WORLD);
-	}*/
 
 	MPI_Barrier(MPI_COMM_WORLD);
-	MPI_Gather(matrix,columns*row_limit,MPI_DOUBLE,m,columns*row_limit,MPI_DOUBLE,0,MPI_COMM_WORLD);
+	MPI_Gather(mat, number_columns * lines, MPI_DOUBLE, o, number_columns * lines, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 }
 
-//returns the number of rows in the inputed processor
-int get_limit_of_row(int proc){
-	return get_size_of_buffer(proc)/size_of_line;
+int get_limit_of_row(int processor)
+{
+	int result = get_size_of_buffer(processor)/size_of_line;
+
+	return result;
 }
 
-void calculate_RREF(double *matrix, int row_limit){
-	int row, col, i;
-	for(col=columns-2, i=rows-1;col>=0;col--, i--){
-		for(row=0;row<row_limit;row++){
-			if(col == row)
+void calculate_RREF(double* mat, int lines)
+{
+	int r, c, a;
+	for(c = number_columns - 2, a = number_rows - 1; c >= 0; c--, a--)
+	{
+		for(r = 0; r < lines; r++)
+		{
+			if(c == r)
+			{
 				break;
-			matrix[row*columns+columns-1] -= matrix[row*columns+col]*matrix[i*columns+columns-1];
-			matrix[row*columns+col] = 0;
+			}
+
+			mat[r * number_columns + number_columns - 1] -= mat[r * number_columns + c] * 
+													mat[a * number_columns + number_columns - 1];
+			mat[r * number_columns + c] = 0;
 		}
 	}
 }
 
-void calculate_RREF_p(double *matrix, int row_limit){
-	int row, col, i, j;
-	double b=1;
-	for(col=columns-2, i=rows-1, j=1;col>=0;col--, i--, j++){
-		
-		if(rank == get_proc_with_row(i)){
-			if(j%row_limit == 0){
-				MPI_Bcast(&matrix[columns-1], 1, MPI_DOUBLE, rank, MPI_COMM_WORLD);
-				b = matrix[columns-1];
-			}else{
-				MPI_Bcast(&matrix[(row_limit-j%row_limit)*columns+columns-1], 1, MPI_DOUBLE, rank, MPI_COMM_WORLD);
-				b = matrix[(row_limit-j%row_limit)*columns+columns-1];
+void calculate_RREF_p(double* mat, int lines)
+{
+	int r, c, a, b;
+	double x = 1;
+
+	for(c = number_columns - 2, a = number_rows - 1, b = 1; c >= 0; c--, a--, b++)
+	{	
+		if(rank == get_row_proc(a))
+		{
+			if(b%lines == 0)
+			{
+				MPI_Bcast(&mat[number_columns - 1], 1, MPI_DOUBLE, rank, MPI_COMM_WORLD);
+				x = mat[number_columns-1];
+			}
+			else
+			{
+				MPI_Bcast(&mat[(lines - b%lines) * number_columns + number_columns-1], 
+														1, MPI_DOUBLE, rank, MPI_COMM_WORLD);
+
+				x = mat[(lines-b%lines)*number_columns+number_columns-1];
 			}	
-		}else{
-			MPI_Bcast(&b, 1, MPI_DOUBLE, get_proc_with_row(i), MPI_COMM_WORLD);
+		}
+		else
+		{
+			MPI_Bcast(&x, 1, MPI_DOUBLE, get_row_proc(a), MPI_COMM_WORLD);
 		}
 
-		for(row=0;row<row_limit;row++){
-			if(col == row || matrix[row*columns+col] == 1)
+		for(r = 0;r < lines; r++)
+		{
+			if(c == r || mat[r*number_columns+c] == 1)
+			{
 				break;
-			matrix[row*columns+columns-1] -= matrix[row*columns+col]*b;
-			matrix[row*columns+col] = 0;
+			}
+
+			mat[r * number_columns + number_columns - 1] -= mat[r * number_columns + c] * x;
+
+			mat[r * number_columns + c] = 0;
 		}
 	}
 	
 }
 
-void write_clicking_probabilities(double *matrix, int row_limit){
+void write_file(double* mat, int lines)
+{
 	if(rank == 0){
 	FILE *file;
 
-	if((file = fopen("clicking_probabilities.txt", "w")) == 0){
-		printf("error creating file.\n");
+	if((file = fopen("clicking_probabilities.txt", "w")) == 0)
+	{
+		printf("File creation error\n");
 		exit(-1);
 	}
 
 
-	int i;
-	for(i=0;i<row_limit;i++){
-		fprintf(file, "%lf\n", *(matrix+i*columns+columns-1));
+	int a;
+	for(a = 0; a < lines; a++)
+	{
+		fprintf(file, "%lf\n", *(mat + a * number_columns + number_columns - 1));
 	}
 
 	fclose(file);
 	}
-/*	MPI_File file;
-
-	char *fileName = "clicking_probabilities.txt";
-	MPI_File_open(MPI_COMM_WORLD, fileName, MPI_MODE_CREATE, MPI_INFO_NULL, &file);
-
-	int i;
-	for(i=0;i<row_limit;i++){
-		printf("%lf\n", *(matrix+i*columns+columns-1));
-		MPI_File_write_shared(file, matrix+(i*columns+columns-1), 1, MPI_DOUBLE, &status);
-	}
-
-	MPI_Barrier(MPI_COMM_WORLD); //wait until all processes finished reading
-	MPI_File_close(&file);*/
-
 }
 
-void divide_by_max(double *matrix, int row_limit, double max){
-	int i;
-	for(i=0;i<row_limit;i++){
-		matrix[i*columns+columns-1] = fabs(matrix[i*columns+columns-1] / max);
-		*(cp+i) = *(matrix+i*columns+columns-1);
+void divide_by_max(double *mat, int lines, double maximum)
+{
+	int a;
+	for(a = 0; a < lines; a++)
+	{
+		mat[a * number_columns + number_columns - 1] = fabs(mat[a * number_columns + number_columns - 1]/maximum);
+
+		*(cp+a) = *(mat+a*number_columns+number_columns-1);
 	}
 }
 
-double find_global_max(double localMax){
-	double globalMax = localMax;
-	if(np == 1){
-		return globalMax;
-	}
-	//send all local maxi to the root to process
-	if(rank != 0){
-		MPI_Send(&localMax, 1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
-		MPI_Bcast(&globalMax, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-	}else{ //root
+double get_global_maximum(double local_maximum)
+{
+	double global_maximum = local_maximum;
 
-		int i;
-		double *maxi;
-		maxi = malloc(sizeof(double) * np-1);
-		for(i=1;i<np;i++){
-			MPI_Recv((maxi+i-1), 1, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &status);
+	if(np == 1)			// If number of processes is 1
+	{
+		return global_maximum;
+	}
+	
+	if(rank != 0)		// Send to root
+	{
+		MPI_Send(&local_maximum, 1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+		MPI_Bcast(&global_maximum, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+	}
+	else
+	{
+		int a;
+		double *max = malloc(sizeof(double) * np - 1);
+
+		for(a = 1; a < np; a++)
+		{
+			MPI_Recv((max + a - 1), 1, MPI_DOUBLE, a, 0, MPI_COMM_WORLD, &status);
 		}
 	
-		for(i=0;i<np-1;i++){
-			if(globalMax < maxi[i]){
-				globalMax = maxi[i];
+		for(a = 0; a < np - 1; a++)
+		{
+			if(global_maximum < max[a])
+			{
+				global_maximum = max[a];
 			}
 		}
-		MPI_Bcast(&globalMax, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+		MPI_Bcast(&global_maximum, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 	}
 
-	return globalMax;
+	return global_maximum;
 }
 
-double find_local_max(double *matrix, int row_limit){
-	
-	int i;
-	double localMax = 0;
-	for(i=0;i<row_limit;i++){
-		if(fabs(matrix[i*columns+columns-1]) > localMax)
-			localMax = fabs(matrix[i*columns+columns-1]);
-	}
-	return localMax;
-}
+double get_local_maximum(double* mat, int lines)
+{	
+	int a;
+	double local_maximum = 0;
 
-
-double * allocate_matrix(int lines){
-	double *matrix;
-	if((matrix = malloc((lines*columns) * sizeof(double))) == NULL){
-			printf("error allocating matrix.\n");
-			exit(-1);
-	}	
-	return matrix;
-}
-
-void print(double *matrix){
-	if(rank == 0){
-	int i, j;
-	for(i=0;i<rows;i++){
-		for(j=0;j<columns;j++){
-			printf("%lf ", matrix[i*columns+j]);
+	for(a = 0; a < lines; a++)
+	{
+		if(fabs(mat[a * number_columns + number_columns - 1]) > local_maximum)
+		{
+			local_maximum = fabs(mat[a * number_columns + number_columns - 1]);
 		}
-		printf("\n");
 	}
+
+	return local_maximum;
+}
+
+
+double* aloc_matrix(int lines)
+{
+	double* mat = malloc((lines*number_columns) * sizeof(double));
+
+	if(mat == NULL)
+	{
+		printf("Matrix allocation error\n");
+		exit(-1);
+	}
+
+	return mat;
+}
+
+void print(double *mat)
+{
+	if(rank == 0)
+	{
+		int a, b;
+
+		for(a = 0; a < number_rows; a++)
+		{
+			for(b = 0; b < number_columns; b++)
+			{
+				printf("%lf ", mat[a * number_columns + b]);
+			}
+
+			printf("\n");
+		}
 	}
 }
 
-void print_matrix(double *matrix, int i, int j) 
+void print_matrix(double *mat, int i, int j) 
 {
-	if(rank == 0){
-		int row, column;
-		for (row = 0; row < i; row++) {
-	 		for (column = 0; column < j; column++) {
-	 			printf("%lf ",matrix[row*columns+column]);
+	if(rank == 0)
+	{
+		int r, c;
+		for (r = 0; r < i; r++) 
+		{
+	 		for (c = 0; c < j; c++) 
+	 		{
+	 			printf("%lf ",mat[r * number_columns + c]);
 		 	}
-		 	printf("\n");
-		}	
 
-		//print from other process
-		int p;
-		for(p=1;p<np;p++){
-			double *buffer = malloc(9*4*sizeof(double));
-			if(buffer == NULL){
-				printf("error mallocing.\n");
+		 	printf("\n");
+		}
+
+		int pr;
+		for(pr = 1; pr < np; pr++)
+		{
+			double *buf = malloc(9 * 4 * sizeof(double));
+
+			if(buf == NULL)
+			{
+				printf("Malloc error\n");
 				exit(-1);
 			}
-			MPI_Recv(buffer, 9*4, MPI_DOUBLE, p, 0, MPI_COMM_WORLD, &status);
-			for(row =0;row<i;row++){
-				for (column = 0; column < j; column++) {
-					printf("%lf ", buffer[row*columns + column]);
+
+			MPI_Recv(buf, 9 * 4, MPI_DOUBLE, pr, 0, MPI_COMM_WORLD, &status);
+
+			for(r = 0; r < i; r++)
+			{
+				for (c = 0; c < j; c++) 
+				{
+					printf("%lf ", buf[r * number_columns + c]);
 				}
+
 				printf("\n");
 			}
 		}
-	}else{
-		MPI_Send(matrix, 9*4, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+	}
+	else
+	{
+		MPI_Send(mat, 9 * 4, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
 	}
 }
 
-//loads contents in the buffer into a matrix
-double * user_matrix_load(char *buffer, int size_of_line){
-	lines = buffer_size / size_of_line;
+double* user_matrix_load(char* buf, int size_of_line)
+{
+	lines = buffer_size/size_of_line;
+	double* mat = aloc_matrix(lines);
 	
-	double *matrix = allocate_matrix(lines);
-	
-	char temp[8];
-	int i, j, k;
-	j = i = k = 0;
-	while(*buffer != '\0'){
-		if(*buffer == '\n'){
-			i++;
-			j=0;
-		}else if(*buffer == ' '){
-			j++;
-		}else{
-			temp[k++] = *buffer;
+	char tmp[8];
+
+	int a = 0;
+	int b = 0;
+	int k = 0;
+
+	while(*buf != '\0')
+	{
+		if(*buf == '\n')
+		{
+			a++;
+			b = 0;
 		}
-		if(k == 8){
+		else if(*buf == ' ')
+		{
+			b++;
+		}
+		else
+		{
+			tmp[k++] = *buf;
+		}
+
+		if(k == 8)
+		{
 			k = 0;
-			matrix[i*columns+j] = atof(temp);
+			mat[a * number_columns + b] = atof(tmp);
 		}
-		*buffer++;
-	}
-	return matrix;
-}
 
-int get_size_of_buffer(int proc){
-	return (proc < overflow)? (lines_per_buffer+1) * size_of_line : lines_per_buffer * size_of_line; 
-}
-
-//reads matrix from file and stores into buffers
-double * user_matrix_read(char *fileName, int size_of_line){
-	MPI_File file;
-
-	//every process will get a buffer to read its section
-	//lets divide up our file..
-
-	//how many lines per buffer?
-	lines_per_buffer = rows / np;
-	//don't forget the overflow!
-	overflow = rows % np; //overflow: [0- np-1]
-
-	//so what's the size of each buffer? 
-		//overflow check
-	buffer_size = get_size_of_buffer(rank);//(rank < overflow)? (lines_per_buffer+1) * size_of_line : lines_per_buffer * size_of_line; 
-
-	//lets create the buffer
-	char *buffer;
-	if((buffer = malloc(buffer_size)) == NULL){
-		printf("error creating buffer.\n");
+		*buf++;
 	}
 
-	//lastly, each process needs to know where to seek the file pointer
-		//because of the overflow, it's not just a simple multiplication
-	int seek;
-	if(rank == 0){
-		seek = 0;
-	}else if(overflow == 0){
-		seek = ((lines_per_buffer)*size_of_line * rank);
-	}else if(rank <= overflow){
-		seek = ((lines_per_buffer+1)*size_of_line * rank);
-	}else{
-		seek = ((lines_per_buffer+1)*size_of_line * (rank-1)) + ((lines_per_buffer)*size_of_line * (rank-overflow));
+	return mat;
+}
+
+
+int get_size_of_buffer(int pr)
+{
+	int result;
+
+	if(pr < overflow)
+	{
+		result = (lines_per_buffer+1) * size_of_line;
+	}
+	else
+	{
+		result = lines_per_buffer * size_of_line;
 	}
 
-	MPI_File_open(MPI_COMM_WORLD, fileName, MPI_MODE_RDONLY, MPI_INFO_NULL, &file);
-	MPI_File_seek(file, seek, MPI_SEEK_SET);
-	MPI_File_read(file, buffer, buffer_size, MPI_CHAR, &status);
-
-
-	MPI_Barrier(MPI_COMM_WORLD); //wait until all processes finished reading
-	MPI_File_close(&file);
-
-	return user_matrix_load(buffer, size_of_line);
+	return result;
 }
 
-//determine size of each line in bytes
-void get_size_of_line(int *size_of_line){
-	//			each element in the row   +   the spaces       + the carriage return					 
-	*size_of_line = sizeof(double) * columns + sizeof(char) * (columns-1) + sizeof(char);
+double * user_matrix_read(char* file_name, int size_of_line)
+{
+	MPI_File mp_file;
+
+	lines_per_buffer = number_rows/ np;
+	overflow = number_rows % np;
+
+	buffer_size = get_size_of_buffer(rank);
+
+	char *buf;
+	if((buf = malloc(buffer_size)) == NULL){
+		printf("Buffer creation error\n");
+	}
+
+	int s;
+
+	if(rank == 0)
+	{
+		s = 0;
+	}
+	else if(overflow == 0)
+	{
+		s = ((lines_per_buffer) * size_of_line * rank);
+	}
+	else if(rank <= overflow)
+	{
+		s = ((lines_per_buffer+1)*size_of_line * rank);
+	}
+	else
+	{
+		s = ((lines_per_buffer+1)*size_of_line * (rank-1)) + 
+				((lines_per_buffer)*size_of_line * (rank - overflow));
+	}
+
+	MPI_File_open(MPI_COMM_WORLD, file_name, MPI_MODE_RDONLY, MPI_INFO_NULL, &mp_file);
+	MPI_File_seek(mp_file, s, MPI_SEEK_SET);
+	MPI_File_read(mp_file, buf, buffer_size, MPI_CHAR, &status);
+
+
+	MPI_Barrier(MPI_COMM_WORLD);
+	MPI_File_close(&mp_file);
+
+	return user_matrix_load(buf, size_of_line);
 }
 
-//determine size of matrix
-void get_matrix_size(char *fileName){
-	FILE *file;
-	//open & check if valid file
-	if((file = fopen(fileName, "r")) == 0){
-		printf("error openening file %s.\n", fileName);
+void get_size_of_line(int* size_of_line)
+{
+	*size_of_line = sizeof(double) * number_columns + 
+						sizeof(char) * (number_columns-1) + sizeof(char);
+}
+
+void get_matrix_size(char *file_name)
+{
+	FILE *f;
+
+	if((f = fopen(file_name, "r")) == 0)
+	{
+		printf("Couldn't open file:  %s.\n", file_name);
 		exit(-1);
 	}
 
-	rows = 1;
-	columns = 1;
+	number_rows = 1;
+	number_columns = 1;
+
 	char c;
-	int columns_known = 0;
-	while(!feof(file)){
-		c = fgetc(file);
-		if(c == ' '){
-			if(!columns_known)
-				(columns)++;
+	int known_columns = 0;
+
+	while(!feof(f))
+	{
+		c = fgetc(f);
+
+		if(c == ' ')
+		{
+			if(!known_columns)
+				(number_columns)++;
 		}
-		if(c == '\n'){
-			(rows)++;
-			columns_known = 1;
+
+		if(c == '\n')
+		{
+			(number_rows)++;
+			known_columns = 1;
 			continue;
 		}
 	}
-	fclose(file);
+	fclose(f);
 }
 
-void print_best_acceptance_threshold(double *cp, int row_limit) {
-	
-	double threshold, local_profit;
-	double global_profit, max_profit = 0, t;
-	int i;
+void print_best_acceptance_threshold(double* cp, int lines) 
+{	
+	double threshold; 
+	double l_profit;
+	double g_profit;
+	double profit_max = 0;
+	double i;
 
-	for(threshold=0.2;threshold<=1.0;threshold+=0.2){
-		local_profit = 0;
-		for(i=0;i<row_limit;i++){
-			if(*(cp+i) > threshold){
-				local_profit += *(cp+i) - 2*(1-*(cp+i));
+	int a;
+
+	for(threshold = 0.2; threshold <= 1.0; threshold += 0.2)
+	{
+		l_profit = 0;
+
+		for(a = 0; a < lines; a++)
+		{
+			if(*(cp+a) > threshold)
+			{
+				l_profit += *(cp+a) - 2*(1-*(cp+a));
 			}
 		}
-		MPI_Reduce(&local_profit, &global_profit, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-		if(rank == 0){
-			if(global_profit > max_profit){
-				max_profit = global_profit;
-				t = threshold;
+
+		MPI_Reduce(&l_profit, &g_profit, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+
+		if(rank == 0)
+		{
+			if(g_profit > profit_max)
+			{
+				profit_max = g_profit;
+				i = threshold;
 			}
 		}
 	}
 
 	if(rank == 0)
-		printf("Acceptance threshold to max profit: %lf -> $%lf\n", t, max_profit);
+	{
+		printf("Acceptance threshold to max profit: %lf -> $%lf\n", i, profit_max);
+	}
 
 }
 
